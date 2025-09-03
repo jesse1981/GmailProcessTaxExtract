@@ -111,17 +111,24 @@ function getOrCreateFolder(path) {
   return parent;
 }
 
-function extractSenderName(sender) {
-  // Try "Name" <email@domain>
-  var matchQuoted = sender.match(/"(.*?)"/);
-  if (matchQuoted && matchQuoted[1]) return sanitizeName(matchQuoted[1]);
+function extractSenderName(fromHeader) {
+  // Try to pull a human name first
+  var matchQuoted = fromHeader.match(/"(.*?)"/);
+  var name = matchQuoted && matchQuoted[1] ? matchQuoted[1] : null;
 
-  // Try Name <email@domain>
-  var matchAngle = sender.match(/^(.*?)\s*<[^>]+>/);
-  if (matchAngle && matchAngle[1]) return sanitizeName(matchAngle[1]);
+  if (!name) {
+    var matchAngle = fromHeader.match(/^(.*?)\s*<[^>]+>/);
+    if (matchAngle && matchAngle[1]) name = matchAngle[1];
+  }
 
-  // Fallback to raw
-  return sanitizeName(sender);
+  var parsed = parseEmailAddress(fromHeader);
+
+  // If no display name (or it's just an email), apply canonical alias rules
+  if (!name || /@/.test(name)) {
+    name = canonicalizeSender(parsed.email, parsed.domain, parsed.local) || parsed.email || fromHeader;
+  }
+
+  return sanitizeName(name);
 }
 
 function sanitizeName(name) {
@@ -227,3 +234,27 @@ function wrapPlainTextAsHtml(text) {
          '</pre>';
 }
 
+function parseEmailAddress(fromHeader) {
+  var emailMatch = fromHeader.match(/<([^>]+)>/);
+  var email = emailMatch ? emailMatch[1]
+            : ((fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || '');
+  var parts = email ? email.split('@') : ['', ''];
+  return {
+    email: email,
+    local: (parts[0] || '').toLowerCase(),
+    domain: (parts[1] || '').toLowerCase()
+  };
+}
+
+// Map certain naked addresses/domains to a canonical folder name
+function canonicalizeSender(email, domain, local) {
+  // ---- AWS aliases → "Amazon Web Services"
+  if (/amazonaws\.com$/i.test(domain)) return 'Amazon Web Services';
+  if (/amazon\.com$/i.test(domain) && /(aws|amazon-web-services|aws-marketplace)/i.test(local)) return 'Amazon Web Services';
+
+  // Add more aliases here as needed, e.g.:
+  // if (/microsoft\.com$/i.test(domain) && /billing|invoices?/i.test(local)) return 'Microsoft';
+  // if (/google\.com$/i.test(domain) && /subscriptions|play|noreply/i.test(local)) return 'Google';
+
+  return null; // no alias -> caller will fallback to the email string
+}
